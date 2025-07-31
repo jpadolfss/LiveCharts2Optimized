@@ -599,6 +599,73 @@ public static class Extensions
     }
 
     /// <summary>
+    /// Reduces the number of points by returning only the minimum and maximum
+    /// values that fall within the same pixel when scaled.
+    /// </summary>
+    /// <param name="source">The source points.</param>
+    /// <param name="scaler">The X scale used to convert a point into pixels.</param>
+    /// <returns>The optimized sequence of points.</returns>
+    internal static IEnumerable<ChartPoint> OptimizeByPixels(this IEnumerable<ChartPoint> source, Scaler scaler)
+    {
+        using var e = source.Where(x => !x.IsEmpty).GetEnumerator();
+        if (!e.MoveNext()) yield break;
+
+        var current = e.Current;
+        var currentPx = (int)Math.Round(scaler.ToPixels(current.Coordinate.SecondaryValue));
+        var minPoint = current;
+        var maxPoint = current;
+        var min = current.Coordinate.PrimaryValue;
+        var max = current.Coordinate.PrimaryValue;
+
+        while (e.MoveNext())
+        {
+            var p = e.Current;
+            var px = (int)Math.Round(scaler.ToPixels(p.Coordinate.SecondaryValue));
+            if (px == currentPx)
+            {
+                var y = p.Coordinate.PrimaryValue;
+                if (y < min)
+                {
+                    min = y;
+                    minPoint = p;
+                }
+                if (y > max)
+                {
+                    max = y;
+                    maxPoint = p;
+                }
+                continue;
+            }
+
+            if (minPoint.Index <= maxPoint.Index)
+            {
+                yield return minPoint;
+                if (minPoint != maxPoint) yield return maxPoint;
+            }
+            else
+            {
+                yield return maxPoint;
+                if (minPoint != maxPoint) yield return minPoint;
+            }
+
+            currentPx = px;
+            minPoint = maxPoint = p;
+            min = max = p.Coordinate.PrimaryValue;
+        }
+
+        if (minPoint.Index <= maxPoint.Index)
+        {
+            yield return minPoint;
+            if (minPoint != maxPoint) yield return maxPoint;
+        }
+        else
+        {
+            yield return maxPoint;
+            if (minPoint != maxPoint) yield return minPoint;
+        }
+    }
+
+    /// <summary>
     /// Returns <see langword="true" /> when the given type is either a reference type or of type <see cref="Nullable{T}"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

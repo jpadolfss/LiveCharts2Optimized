@@ -54,6 +54,7 @@ public abstract class CoreLineSeries<TModel, TVisual, TLabel, TPathGeometry, TEr
     private float _lineSmoothness = 0.65f;
     private float _geometrySize = 14f;
     private bool _enableNullSplitting = true;
+    private bool _optimizeRendering = false;
     private Paint? _geometryFill;
     private Paint? _geometryStroke;
     private Paint? _errorPaint;
@@ -89,6 +90,12 @@ public abstract class CoreLineSeries<TModel, TVisual, TLabel, TPathGeometry, TEr
 
     /// <inheritdoc cref="ILineSeries.EnableNullSplitting"/>
     public bool EnableNullSplitting { get => _enableNullSplitting; set => SetProperty(ref _enableNullSplitting, value); }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the series should reduce the number
+    /// of segments using pixel based optimization.
+    /// </summary>
+    public bool OptimizeRendering { get => _optimizeRendering; set => SetProperty(ref _optimizeRendering, value); }
 
     /// <inheritdoc cref="ILineSeries.GeometryFill"/>
     public Paint? GeometryFill
@@ -134,9 +141,11 @@ public abstract class CoreLineSeries<TModel, TVisual, TLabel, TPathGeometry, TEr
         // the following cases probably have a similar performance impact
         // this options were necessary at some older point when _enableNullSplitting = false could improve performance
         // ToDo: Check this out, maybe this is unnecessary now and we should just go for the first approach all the times.
+        var enumerable = Fetch(cartesianChart);
+        if (_optimizeRendering) enumerable = enumerable.OptimizeByPixels(secondaryScale);
         var segments = _enableNullSplitting
-            ? Fetch(cartesianChart).SplitByNullGaps(point => DeleteNullPoint(point, secondaryScale, primaryScale)) // calling this method is probably as expensive as the line bellow
-            : [Fetch(cartesianChart)];
+            ? enumerable.SplitByNullGaps(point => DeleteNullPoint(point, secondaryScale, primaryScale)) // calling this method is probably as expensive as the line bellow
+            : [enumerable];
         var stacker = (SeriesProperties & SeriesProperties.Stacked) == SeriesProperties.Stacked
             ? cartesianChart.SeriesContext.GetStackPosition(this, GetStackGroup())
             : null;
@@ -185,7 +194,11 @@ public abstract class CoreLineSeries<TModel, TVisual, TLabel, TPathGeometry, TEr
             var isSegmentEmpty = true;
             VectorManager<CubicBezierSegment>? strokeVector = null, fillVector = null;
 
-            foreach (var data in GetSpline(segment, stacker))
+            var dataSource = _lineSmoothness == 0
+                ? GetLineSegments(segment, stacker)
+                : GetSpline(segment, stacker);
+
+            foreach (var data in dataSource)
             {
                 if (!hasPaths)
                 {
@@ -815,6 +828,64 @@ public abstract class CoreLineSeries<TModel, TVisual, TLabel, TPathGeometry, TEr
                 X2 = next.SecondaryValue,
                 Y2 = next.PrimaryValue + nys
             };
+        }
+    }
+
+    /// <summary>
+    /// Builds a collection of straight line segments from the given points.
+    /// </summary>
+    /// <param name="points">The points.</param>
+    /// <param name="stacker">The stacker.</param>
+    protected internal IEnumerable<BezierData> GetLineSegments(
+        IEnumerable<ChartPoint> points,
+        StackPosition? stacker)
+    {
+        using var e = points.Where(p => !p.IsEmpty).GetEnumerator();
+        if (!e.MoveNext()) yield break;
+
+        var current = e.Current;
+        var sc = (current.Coordinate.PrimaryValue >= 0
+            ? stacker?.GetStack(current).Start
+            : stacker?.GetStack(current).NegativeStart) ?? 0d;
+
+        var hasNext = e.MoveNext();
+
+        yield return new BezierData(current)
+        {
+            X0 = current.Coordinate.SecondaryValue,
+            Y0 = current.Coordinate.PrimaryValue + sc,
+            X1 = current.Coordinate.SecondaryValue,
+            Y1 = current.Coordinate.PrimaryValue + sc,
+            X2 = current.Coordinate.SecondaryValue,
+            Y2 = current.Coordinate.PrimaryValue + sc,
+            IsNextEmpty = !hasNext
+        };
+
+        var prev = current;
+        var prevStack = sc;
+
+        while (hasNext)
+        {
+            current = e.Current;
+            sc = (current.Coordinate.PrimaryValue >= 0
+                ? stacker?.GetStack(current).Start
+                : stacker?.GetStack(current).NegativeStart) ?? 0d;
+            var nextHasNext = e.MoveNext();
+
+            yield return new BezierData(current)
+            {
+                X0 = prev.Coordinate.SecondaryValue,
+                Y0 = prev.Coordinate.PrimaryValue + prevStack,
+                X1 = current.Coordinate.SecondaryValue,
+                Y1 = current.Coordinate.PrimaryValue + sc,
+                X2 = current.Coordinate.SecondaryValue,
+                Y2 = current.Coordinate.PrimaryValue + sc,
+                IsNextEmpty = !nextHasNext
+            };
+
+            prev = current;
+            prevStack = sc;
+            hasNext = nextHasNext;
         }
     }
 
